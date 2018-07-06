@@ -4,13 +4,35 @@ package main
 import (
 	"encoding/gob"
 	"fmt"
+	"image"
+	"image/color"
 	"image/png"
 	"io/ioutil"
 	"math"
 	"math/rand"
 	"os"
+	"runtime"
 	"time"
 )
+
+func sigmoid(x float64) float64 {
+	return 1 / (1 + math.Exp(-x))
+}
+
+func sigmoidDeriv(x float64) float64 {
+	return sigmoid(x) * (1 - sigmoid(x))
+}
+
+func ReLU(x float64) float64 {
+	return math.Max(0, x)
+}
+
+func ReLUDeriv(x float64) float64 {
+	if x <= 0 {
+		return 0
+	}
+	return 1
+}
 
 type neuralNet struct {
 	Weights   [][][]float64
@@ -67,7 +89,7 @@ func (nn *neuralNet) process(input []float64) []float64 {
 				activ += nn.nodes[i][k] * nn.Weights[i][j][k]
 			}
 			nn.activ[i][j] = activ
-			nn.nodes[i+1][j] = 1 / (1 + math.Exp(-activ))
+			nn.nodes[i+1][j] = sigmoid(activ)
 		}
 	}
 	return nn.nodes[len(nn.nodes)-1]
@@ -87,12 +109,10 @@ func (nn *neuralNet) backprop(input, expected []float64) float64 {
 			} else {
 				nn.cPartials[i][j] = 0
 				for k := 0; k < len(nn.Weights[i+1]); k++ {
-					activ := nn.activ[i+1][k]
-					nn.cPartials[i][j] += nn.Weights[i+1][k][j] * math.Exp(-activ) / ((1 + math.Exp(-activ)) * (1 + math.Exp(-activ))) * nn.cPartials[i+1][k]
+					nn.cPartials[i][j] += nn.Weights[i+1][k][j] * sigmoidDeriv(nn.activ[i+1][k]) * nn.cPartials[i+1][k]
 				}
 			}
-			activ := nn.activ[i][j]
-			activPartial := math.Exp(-activ) / ((1 + math.Exp(-activ)) * (1 + math.Exp(-activ)))
+			activPartial := sigmoidDeriv(nn.activ[i][j])
 			for k := 0; k < len(nn.Weights[i][j]); k++ {
 				nn.wPartials[i][j][k] = nn.nodes[i][k] * activPartial * nn.cPartials[i][j]
 			}
@@ -138,7 +158,7 @@ func (nn *neuralNet) train(input, expected [][]float64) {
 	}
 	fmt.Printf("Total cost of %d training examples: %f. Training accuracy: %f\n", len(input), costTotal, float64(correctTotal)/float64(len(input)))
 	// TODO optimize learning rate
-	prop := 0.005 / float64(len(input))
+	prop := 0.01 / float64(len(input))
 	for i := 0; i < len(nn.Weights); i++ {
 		for j := 0; j < len(nn.Weights[i]); j++ {
 			nn.Biases[i][j] -= prop * bPartialsTotal[i][j]
@@ -149,10 +169,99 @@ func (nn *neuralNet) train(input, expected [][]float64) {
 	}
 }
 
+func (nn *neuralNet) test(testingData [][][]float64) {
+	files, err := ioutil.ReadDir("out/missed")
+	if err != nil {
+		fmt.Println("error reading out/missed:", err)
+		return
+	}
+	for _, f := range files {
+		//fmt.Printf("removing file: out/missed/%s\n", f.Name())
+		err := os.Remove(fmt.Sprintf("out/missed/%s", f.Name()))
+		if err != nil {
+			fmt.Println("error clearing previous missed", err)
+			return
+		}
+	}
+
+	numTests := 0
+	numCorrect := 0
+	for i := 0; i < 10; i++ {
+		numTests += len(testingData[i])
+		for j := 0; j < len(testingData[i]); j++ {
+			output := nn.process(testingData[i][j])
+			highest := 0
+			for k := 1; k < len(output); k++ {
+				if output[k] > output[highest] {
+					highest = k
+				}
+			}
+			if highest == i {
+				numCorrect++
+			} else {
+				file, err := os.Create(fmt.Sprintf("out/missed/%d-%d-%d.png", i, j, highest))
+				if err != nil {
+					fmt.Println("error creating image in out/missed:", err)
+					return
+				}
+				img := image.NewRGBA(image.Rect(0, 0, 32, 32))
+				for y := 0; y < 32; y++ {
+					for x := 0; x < 32; x++ {
+						if testingData[i][j][y*32+x] > 0 {
+							img.Set(x, y, color.RGBA{255, 255, 255, 255})
+						} else {
+							img.Set(x, y, color.RGBA{0, 0, 0, 255})
+						}
+					}
+				}
+				png.Encode(file, img)
+				file.Close()
+			}
+		}
+	}
+	fmt.Printf("ACCURACY: (%d / %d), %f\n", numCorrect, numTests, float64(numCorrect)/float64(numTests))
+}
+
+func getImages(path string) [][][]float64 {
+	images := make([][][]float64, 10)
+	for i := 0; i < 10; i++ {
+		files, err := ioutil.ReadDir(fmt.Sprintf("%s/%d", path, i))
+		if err != nil {
+			fmt.Println(err)
+			return nil
+		}
+		images[i] = make([][]float64, len(files))
+		for j := 0; j < len(files); j++ {
+			file, err := os.Open(fmt.Sprintf("%s/%d/%s", path, i, files[j].Name()))
+			if err != nil {
+				fmt.Println(err)
+				return nil
+			}
+			img, err := png.Decode(file)
+			if err != nil {
+				fmt.Println(err)
+				return nil
+			}
+			file.Close()
+			w, h := img.Bounds().Max.X, img.Bounds().Max.Y
+			images[i][j] = make([]float64, w*h)
+			for y := 0; y < h; y++ {
+				for x := 0; x < w; x++ {
+					r, _, _, _ := img.At(x, y).RGBA()
+					if r >= 1024 {
+						images[i][j][y*w+x] = 1
+					}
+				}
+			}
+		}
+	}
+	return images
+}
+
 func main() {
 	rand.Seed(time.Now().UnixNano())
 
-	nn := newNeuralNet([]int{1024, 16, 16, 10})
+	nn := newNeuralNet([]int{1024, 48, 10})
 	file, err := os.Open("nn.txt")
 	if os.IsNotExist(err) {
 		fmt.Println("Creating new random neural net")
@@ -172,63 +281,41 @@ func main() {
 	//fmt.Println(nn.process(make([]float64, 1024)))
 	//nn.backprop(make([]float64, 1024), []float64{0, 0, 0, 0, 1, 0, 0, 0, 0, 0})
 
-	training := make([][]os.FileInfo, 10)
-	for i := 0; i < 10; i++ {
-		training[i], err = ioutil.ReadDir(fmt.Sprintf("out/train/%d", i))
-		if err != nil {
-			fmt.Println(err)
-			return
-		}
-	}
-	batchInputs := make([][]float64, 100)
-	batchExpected := make([][]float64, 100)
+	trainingData := getImages("out/train")
+	testingData := getImages("out/test")
+	batchInputs := make([][]float64, 200)
+	batchExpected := make([][]float64, 200)
 	for batchNum := 0; true; batchNum++ {
 		start := time.Now()
 		for i := 0; i < 10; i++ {
-			files := training[i]
-			for j := 0; j < 10; j++ {
-				idx := rand.Intn(len(files))
-				file, err := os.Open(fmt.Sprintf("out/train/%d/%s", i, files[idx].Name()))
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
-				img, err := png.Decode(file)
-				if err != nil {
-					fmt.Println(err)
-					return
-				}
-				file.Close()
-				w, h := img.Bounds().Max.X, img.Bounds().Max.Y
-				batchInputs[10*i+j] = make([]float64, w*h)
-				for x := 0; x < w; x++ {
-					for y := 0; y < h; y++ {
-						r, _, _, _ := img.At(x, y).RGBA()
-						batchInputs[10*i+j][y*w+x] = float64(r) / 65535
-					}
-				}
-				batchExpected[10*i+j] = make([]float64, 10)
-				batchExpected[10*i+j][i] = 1
+			for j := 0; j < 20; j++ {
+				batchInputs[20*i+j] = trainingData[i][rand.Intn(len(trainingData[i]))]
+				batchExpected[20*i+j] = make([]float64, 10)
+				batchExpected[20*i+j][i] = 1
 			}
 		}
 		elapsed := time.Now().Sub(start)
+		var m runtime.MemStats
+		runtime.ReadMemStats(&m)
 		start = time.Now()
 		nn.train(batchInputs, batchExpected)
-		fmt.Printf("%s\t%s\n", elapsed, time.Now().Sub(start))
-		if batchNum%500 == 0 {
-			fmt.Println("Saving nn")
+		fmt.Printf("%d\t%s    \t%s\t%d\t%d\n", batchNum, elapsed, time.Now().Sub(start), m.Alloc>>14, m.NumGC)
+		if batchNum%1000 == 0 {
+			fmt.Println("---------------------------------------------")
+			nn.test(testingData)
 			file, err := os.Create("nn.txt")
 			if err != nil {
-				fmt.Println("err creating nn.txt:", err)
+				fmt.Println("error creating nn.txt:", err)
 				return
 			}
 			enc := gob.NewEncoder(file)
 			err = enc.Encode(nn)
 			if err != nil {
-				fmt.Println("err creating gob encoder:", err)
+				fmt.Println("error creating gob encoder:", err)
 				return
 			}
 			file.Close()
+			fmt.Println("---------------------------------------------")
 		}
 	}
 }

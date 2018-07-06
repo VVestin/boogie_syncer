@@ -105,7 +105,7 @@ SymbolLoop:
 		resized.Close()
 	}
 
-	fmt.Printf("Generated %d training images from /res/train/%s.png\n", symNum, fileName)
+	fmt.Printf("Generated %d training images from /res/train_raw/%s.png\n", symNum, fileName)
 
 	//gocv.IMWrite(fmt.Sprintf("out/train/%s/out1.png", fileName), thresh)
 	//gocv.IMWrite(fmt.Sprintf("out/train/%s/out2.png", fileName), blur)
