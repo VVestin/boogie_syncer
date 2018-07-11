@@ -32,7 +32,7 @@ func max(a, b int) int {
 func genTraining(fileName string) {
 	emptyMat := gocv.Mat{}
 
-	img := gocv.IMRead(fmt.Sprintf("res/train_raw/%s.png", fileName), gocv.IMReadColor)
+	img := gocv.IMRead(fmt.Sprintf("res/train_raw/old5/%s.png", fileName), gocv.IMReadColor)
 	defer img.Close()
 	grey := gocv.NewMat()
 	defer grey.Close()
@@ -79,7 +79,7 @@ SymbolLoop:
 			adjCnt[j] = image.Pt(2*(p.X-s.rect.Min.X+1), 2*(p.Y-s.rect.Min.Y+1))
 		}
 		r := gocv.BoundingRect(adjCnt)
-		s.img = gocv.NewMatWithSize(max(16, r.Max.Y-r.Min.Y+4), max(16, r.Max.X-r.Min.X+4), gocv.MatTypeCV8U)
+		s.img = gocv.NewMatWithSize(r.Max.Y-r.Min.Y+4, r.Max.X-r.Min.X+4, gocv.MatTypeCV8U)
 		gocv.Rectangle(&s.img, image.Rect(0, 0, s.img.Cols(), s.img.Rows()), color.RGBA{0, 0, 0, 255}, -1)
 		gocv.DrawContours(&s.img, [][]image.Point{adjCnt}, 0, color.RGBA{255, 255, 255, 255}, -1)
 		symbols[i] = s
@@ -97,9 +97,10 @@ SymbolLoop:
 		}
 		symNum++
 		resized := gocv.NewMat()
-		gocv.Resize(s.img, &resized, image.Point{32, 32}, 0, 0, gocv.InterpolationCubic)
+		gocv.Resize(s.img, &resized, image.Point{min(32, max(16, int(32 * float64(s.img.Cols()) / float64(s.img.Rows())))), 32}, 0, 0, gocv.InterpolationCubic)
 
-		gocv.IMWrite(fmt.Sprintf("out/train/%s/%d.png", fileName, fileNum), resized)
+		//fmt.Printf("%d: (%d, %d) -> (%d, %d)\n", symNum, s.img.Cols(), s.img.Rows(), resized.Cols(), resized.Rows())
+		gocv.IMWrite(fmt.Sprintf("out/train2/%s/%d.png", fileName, fileNum), resized)
 
 		s.img.Close()
 		resized.Close()
@@ -116,6 +117,8 @@ SymbolLoop:
 func main() {
 	fmt.Println("Doing opencv stuff")
 	for i := 0; i < 10; i++ {
-		genTraining(fmt.Sprintf("%d", i))
+		if i != 8 {
+			genTraining(fmt.Sprintf("%d", i))
+		}
 	}
 }
